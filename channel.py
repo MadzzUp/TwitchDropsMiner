@@ -279,7 +279,29 @@ class Channel:
         self._gui_channels.remove(self)
 
     async def get_spade_url(self) -> URLType:
-    return URLType("https://spade.twitch.tv/track")
+        """
+        To get this monstrous thing, you have to walk a chain of requests.
+        Streamer page (HTML) --parse-> Streamer Settings (JavaScript) --parse-> Spade URL
+
+        For mobile view, spade_url is available immediately from the page, skipping step #2.
+        """
+        SETTINGS_PATTERN: str = r'src="(https://[\w.]+/config/settings\.[0-9a-f]{32}\.js)"'
+        # NOTE: "beacon" appears in the file first, so it's the most likely one to be matched.
+        SPADE_PATTERN: str = r'"(?:beacon|spade)_?url": ?"(https://[.\w\-/]+)"'
+        async with self._twitch.request("GET", self.url) as response1:
+            streamer_html: str = await response1.text(encoding="utf8")
+        match = re.search(SPADE_PATTERN, streamer_html, re.I)
+        if not match:
+            match = re.search(SETTINGS_PATTERN, streamer_html, re.I)
+            if not match:
+                raise MinerException("Error while spade_url extraction: step #1")
+            streamer_settings = match.group(1)
+            async with self._twitch.request("GET", streamer_settings) as response2:
+                settings_js: str = await response2.text(encoding="utf8")
+            match = re.search(SPADE_PATTERN, settings_js, re.I)
+            if not match:
+                raise MinerException("Error while spade_url extraction: step #2")
+        return URLType(match.group(1))
 
     def _check_drops_enabled(self, available_drops: list[JsonType]) -> bool:
         return any(
